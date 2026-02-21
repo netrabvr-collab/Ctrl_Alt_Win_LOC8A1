@@ -6,7 +6,7 @@ from sklearn.metrics import accuracy_score, classification_report
 import joblib
 
 # -------------------------
-# Load CLEAN dataset
+# Load Clean Dataset
 # -------------------------
 df = pd.read_csv("trade_data_processed_cleaned.csv")
 
@@ -22,18 +22,18 @@ if "Converted" not in df.columns:
         (df["Prompt_Response_Score"] > df["Prompt_Response_Score"].median())
     ).astype(int)
 
-    # Add 10% noise for realism
+    # Add 10% noise
     noise = np.random.rand(len(df)) < 0.1
     df.loc[noise, "Converted"] = 1 - df.loc[noise, "Converted"]
 
     df.to_csv("trade_data_processed_cleaned.csv", index=False)
-    print("Converted column created and saved.")
+    print("Converted column created.")
 
 print("\nConverted distribution:")
 print(df["Converted"].value_counts())
 
 # -------------------------
-# Features & Target
+# Features
 # -------------------------
 features = [
     "Intent_Score",
@@ -50,7 +50,7 @@ X = df[features]
 y = df["Converted"]
 
 # -------------------------
-# Train-Test Split
+# Train/Test Split
 # -------------------------
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42

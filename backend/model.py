@@ -7,24 +7,21 @@ from pathlib import Path
 # -------------------------
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "trade_data_processed_cleaned.csv"
+NEWS_PATH = BASE_DIR / "news_data.csv"
 MODEL_PATH = BASE_DIR / "lead_model.pkl"
 
 # -------------------------
 # Load Model
 # -------------------------
 if not MODEL_PATH.exists():
-    raise FileNotFoundError("Trained model not found. Run train_model.py first.")
+    raise FileNotFoundError("Run train_model.py first.")
 
 model = joblib.load(MODEL_PATH)
 
-
 # -------------------------
-# Generate AI Lead Scores
+# Generate Lead Scores
 # -------------------------
-def generate_lead_scores() -> pd.DataFrame:
-
-    if not DATA_PATH.exists():
-        raise FileNotFoundError("Dataset not found.")
+def generate_lead_scores():
 
     df = pd.read_csv(DATA_PATH)
 
@@ -40,16 +37,10 @@ def generate_lead_scores() -> pd.DataFrame:
     ]
 
     X = df[features]
-
-    # Predict probability of Converted = 1
     probabilities = model.predict_proba(X)[:, 1]
-
-    # Convert to 0–100 score
     df["lead_score"] = probabilities * 100
 
-    # -------------------------
-    # Categorize Leads
-    # -------------------------
+    # Categorization
     def categorize(score):
         if score >= 75:
             return "High Potential"
@@ -60,34 +51,18 @@ def generate_lead_scores() -> pd.DataFrame:
 
     df["lead_category"] = df["lead_score"].apply(categorize)
 
-    # -------------------------
-    # AI Explanation Generator
-    # -------------------------
-    def generate_reason(row):
-        reasons = []
+    # AI Reason (vectorized basic logic)
+    df["ai_reason"] = "Balanced Performance"
 
-        if row["Intent_Score"] > df["Intent_Score"].quantile(0.65):
-            reasons.append("High Buyer Intent")
+    df.loc[df["Intent_Score"] > df["Intent_Score"].quantile(0.65),
+           "ai_reason"] = "High Buyer Intent"
 
-        if row["Prompt_Response_Score"] > df["Prompt_Response_Score"].median():
-            reasons.append("Strong Responsiveness")
+    df.loc[df["Prompt_Response_Score"] > df["Prompt_Response_Score"].median(),
+           "ai_reason"] += ", Strong Responsiveness"
 
-        if row["SalesNav_ProfileViews"] > df["SalesNav_ProfileViews"].median():
-            reasons.append("High Engagement Activity")
+    df.loc[df["SalesNav_ProfileViews"] > df["SalesNav_ProfileViews"].median(),
+           "ai_reason"] += ", High Engagement"
 
-        if row["Quantity_Tons"] > df["Quantity_Tons"].median():
-            reasons.append("Strong Production Capacity")
-
-        if row["Tariff_Impact"] < df["Tariff_Impact"].median():
-            reasons.append("Low Tariff Risk")
-
-        return ", ".join(reasons[:3]) if reasons else "Balanced Performance"
-
-    df["ai_reason"] = df.apply(generate_reason, axis=1)
-
-    # -------------------------
-    # Final Output Columns
-    # -------------------------
     final_df = df[[
         "Exporter_ID",
         "Industry",
@@ -107,7 +82,7 @@ def generate_lead_scores() -> pd.DataFrame:
 # -------------------------
 def get_feature_importance():
 
-    feature_names = [
+    features = [
         "Intent_Score",
         "Shipment_Value_USD",
         "Quantity_Tons",
@@ -118,11 +93,83 @@ def get_feature_importance():
         "Currency_Shift"
     ]
 
-    importances = model.feature_importances_
-
-    importance_df = pd.DataFrame({
-        "feature": feature_names,
-        "importance": importances
+    return pd.DataFrame({
+        "feature": features,
+        "importance": model.feature_importances_
     }).sort_values(by="importance", ascending=False)
 
-    return importance_df
+
+# -------------------------
+# Exporter Dashboard
+# -------------------------
+def get_exporter_dashboard(exporter_id):
+
+    df = generate_lead_scores()
+
+    if exporter_id not in df["Exporter_ID"].values:
+        return None
+
+    df = df.sort_values(by="lead_score", ascending=False).reset_index(drop=True)
+
+    row_index = df.index[df["Exporter_ID"] == exporter_id]
+
+    if len(row_index) == 0:
+        return None
+
+    idx = int(row_index[0])  # convert to Python int
+    rank = int(idx + 1)
+    total = int(len(df))
+    percentile = float(round((1 - (rank / total)) * 100, 2))
+
+    row = df.iloc[idx]
+
+    return {
+        "Exporter_ID": str(exporter_id),
+        "lead_score": float(round(row["lead_score"], 2)),
+        "lead_category": str(row["lead_category"]),
+        "ai_reason": str(row["ai_reason"]),
+        "rank": rank,
+        "total_exporters": total,
+        "percentile": percentile
+    }
+
+
+# -------------------------
+# Safe Export Regions
+# -------------------------
+def recommend_safe_regions(exporter_id):
+
+    trade_df = pd.read_csv(DATA_PATH)
+
+    if exporter_id not in trade_df["Exporter_ID"].values:
+        return None
+
+    exporter = trade_df[trade_df["Exporter_ID"] == exporter_id].iloc[0]
+    industry = exporter["Industry"]
+
+    news_df = pd.read_csv(NEWS_PATH)
+
+    industry_news = news_df[
+        news_df["Affected_Industry"].str.lower() == industry.lower()
+    ].copy()
+
+    if industry_news.empty:
+        return {"message": "No regional risk data available."}
+
+    industry_news["risk_score"] = (
+        0.35 * abs(industry_news["Tariff_Change"]) +
+        0.30 * industry_news["War_Flag"] +
+        0.20 * industry_news["Natural_Calamity_Flag"] +
+        0.15 * abs(industry_news["Currency_Shift"])
+    )
+
+    recommendations = industry_news.groupby("Region").mean(numeric_only=True).reset_index()
+    recommendations = recommendations.sort_values(by="risk_score").head(5)
+
+    return recommendations[[
+        "Region",
+        "risk_score",
+        "Tariff_Change",
+        "War_Flag",
+        "Currency_Shift"
+    ]].to_dict(orient="records")

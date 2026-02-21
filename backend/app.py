@@ -1,17 +1,19 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from model import generate_lead_scores, get_feature_importance
-
-
-app = FastAPI(
-    title="TradeSwipe API",
-    description="AI-driven Export Lead Scoring & Matchmaking System",
-    version="1.0.0"
+from model import (
+    generate_lead_scores,
+    get_feature_importance,
+    get_exporter_dashboard,
+    recommend_safe_regions
 )
 
+app = FastAPI(
+    title="TradeSwipe AI Platform",
+    version="2.0"
+)
 
 # -----------------------------
-# Buyer Input Model
+# Buyer Model
 # -----------------------------
 class BuyerRequest(BaseModel):
     industry: str
@@ -23,50 +25,36 @@ class BuyerRequest(BaseModel):
 
 @app.get("/")
 def home():
-    return {"message": "TradeSwipe AI Backend Running 🚀"}
+    return {"message": "TradeSwipe AI Running 🚀"}
 
 
-# -----------------------------
-# Get All Leads
-# -----------------------------
 @app.get("/lead-scores")
-def get_lead_scores(limit: int = 50):
+def lead_scores(limit: int = 50):
     df = generate_lead_scores()
     return df.head(limit).to_dict(orient="records")
 
 
-# -----------------------------
-# Get Top N Leads
-# -----------------------------
-@app.get("/top-leads")
-def get_top_leads(limit: int = 5):
-    df = generate_lead_scores()
-    return df.head(limit).to_dict(orient="records")
+@app.get("/feature-importance")
+def feature_importance():
+    return get_feature_importance().to_dict(orient="records")
 
 
-# -----------------------------
-# Filter by Industry
-# -----------------------------
-@app.get("/filter-industry")
-def filter_by_industry(industry: str):
-    df = generate_lead_scores()
-    filtered = df[df["Industry"].str.lower() == industry.lower()]
-    return filtered.to_dict(orient="records")
+@app.get("/exporter-dashboard")
+def exporter_dashboard(exporter_id: str):
+    result = get_exporter_dashboard(exporter_id)
+    if result is None:
+        return {"message": "Exporter not found."}
+    return result
 
 
-# -----------------------------
-# Filter by State
-# -----------------------------
-@app.get("/filter-state")
-def filter_by_state(state: str):
-    df = generate_lead_scores()
-    filtered = df[df["State"].str.lower() == state.lower()]
-    return filtered.to_dict(orient="records")
+@app.get("/safe-export-regions")
+def safe_export_regions(exporter_id: str):
+    result = recommend_safe_regions(exporter_id)
+    if result is None:
+        return {"message": "Exporter not found."}
+    return result
 
 
-# -----------------------------
-# AI Live Matchmaking
-# -----------------------------
 @app.post("/match-live")
 def match_live(buyer: BuyerRequest):
 
@@ -77,35 +65,24 @@ def match_live(buyer: BuyerRequest):
     ].copy()
 
     if candidates.empty:
-        return {"message": "No exporters found for this industry"}
+        return {"message": "No exporters found."}
 
-    # Quantity compatibility
     candidates["quantity_diff"] = abs(
         candidates["Quantity_Tons"] - buyer.required_quantity
     )
     candidates["quantity_score"] = 1 / (1 + candidates["quantity_diff"])
 
-    # Intent alignment
     candidates["intent_alignment"] = buyer.intent_score / 100
 
-    # Risk penalty
     risk_map = {"Low": 0.05, "Medium": 0.10, "High": 0.20}
     risk_penalty = risk_map.get(buyer.risk_tolerance, 0.10)
 
-    # Final match score
     candidates["match_score"] = (
-        0.50 * candidates["lead_score"] +
-        0.30 * candidates["quantity_score"] * 100 +
-        0.20 * candidates["intent_alignment"] * 100
+        0.5 * candidates["lead_score"] +
+        0.3 * candidates["quantity_score"] * 100 +
+        0.2 * candidates["intent_alignment"] * 100
     ) * (1 - risk_penalty)
 
-    candidates = candidates.sort_values(
-        "match_score", ascending=False
-    ).head(5)
-
-    return candidates.to_dict(orient="records")
-@app.get("/feature-importance")
-def feature_importance():
-    df = get_feature_importance()
-    return df.to_dict(orient="records")
-
+    return candidates.sort_values(
+        by="match_score", ascending=False
+    ).head(5).to_dict(orient="records")
