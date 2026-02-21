@@ -1,119 +1,133 @@
 import pandas as pd
-import os
-import numpy as np
-from tqdm import tqdm
+from pathlib import Path
 
-# --------------------------
-# Load file
-# --------------------------
-file_path = "data/trade_data.xlsx"
-df = pd.read_excel(file_path, sheet_name=0, engine="openpyxl")
-print("Original head:")
-print(df.head())
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH = BASE_DIR / "data" / "trade_data.xlsx"
+OUTPUT_PATH = BASE_DIR / "outputs" / "trade_data_processed.csv"
 
-# --------------------------
-# Map columns to target schema
-# --------------------------
-col_map = {
-    'Record_ID': 'News_ID',
-    'Date': 'Date',
-    'State': 'Region',
-    'Industry': 'Event_Type',
-    'Tariff_Impact': 'Tariff_Change',
-    'StockMarket_Impact': 'StockMarket_Shock',
-    'Currency_Shift': 'Currency_Shift',
-    'War_Risk': 'War_Flag',
-    'Natural_Calamity_Risk': 'Natural_Calamity_Flag',
-    'Impact_Level': 'Impact_Level'
-}
 
-# Rename columns if they exist
-for old, new in col_map.items():
-    if old in df.columns:
-        df = df.rename(columns={old: new})
+def process_trade_data(save: bool = True) -> pd.DataFrame:
+    """
+    Clean and engineer features from raw trade data.
+    """
 
-# Ensure required columns exist
-required = ['News_ID','Date','Region','Event_Type']
-for req in required:
-    if req not in df.columns:
-        df[req] = "Unknown"
+    df = pd.read_excel(DATA_PATH, engine="openpyxl")
 
-# Drop rows missing critical info
-df = df.dropna(subset=['News_ID','Date','Region','Event_Type'])
+    # --------------------------
+    # Column Mapping
+    # --------------------------
+    col_map = {
+        'Record_ID': 'News_ID',
+        'Date': 'Date',
+        'State': 'Region',
+        'Industry': 'Event_Type',
+        'Tariff_Impact': 'Tariff_Change',
+        'StockMarket_Impact': 'StockMarket_Shock',
+        'Currency_Shift': 'Currency_Shift',
+        'War_Risk': 'War_Flag',
+        'Natural_Calamity_Risk': 'Natural_Calamity_Flag',
+        'Impact_Level': 'Impact_Level'
+    }
 
-# --------------------------
-# Normalize text fields
-# --------------------------
-for col in ['Region','Event_Type']:
-    df[col] = df[col].astype(str).str.strip().str.lower().fillna('unknown').astype('category')
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
-# --------------------------
-# Date to datetime
-# --------------------------
-df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-df = df.dropna(subset=['Date'])
+    # --------------------------
+    # Required Columns
+    # --------------------------
+    required = ['News_ID', 'Date', 'Region', 'Event_Type']
+    for col in required:
+        if col not in df.columns:
+            df[col] = "Unknown"
 
-# --------------------------
-# Numeric optional fields
-# --------------------------
-numeric_fields = ['Impact_Level','Tariff_Change','StockMarket_Shock','Currency_Shift']
-for col in numeric_fields:
-    if col not in df.columns:
-        df[col] = 0.0
-    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
+    df = df.dropna(subset=required)
 
-# --------------------------
-# Binary flags
-# --------------------------
-for col in ['War_Flag','Natural_Calamity_Flag']:
-    if col not in df.columns:
-        df[col] = 0
-    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+    # --------------------------
+    # Text Normalization
+    # --------------------------
+    for col in ['Region', 'Event_Type']:
+        df[col] = (
+            df[col]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .fillna('unknown')
+            .astype('category')
+        )
 
-# --------------------------
-# Compute Impact Score
-# --------------------------
-df['Impact_Score'] = df['Impact_Level'] + df['Tariff_Change'] + df['StockMarket_Shock'] + df['Currency_Shift'] + df['War_Flag'] + df['Natural_Calamity_Flag']
+    # --------------------------
+    # Date Handling
+    # --------------------------
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df = df.dropna(subset=['Date'])
 
-# --------------------------
-# Additional features
-# --------------------------
-if 'Shipment_Value_USD' in df.columns:
-    df = df.sort_values('Date')
-    df['import_growth_pct'] = df['Shipment_Value_USD'].pct_change().fillna(0)*100
-    df['price_avg'] = df['Shipment_Value_USD'].rolling(7, min_periods=1).mean()
-else:
-    df['import_growth_pct'] = 0.0
-    df['price_avg'] = 0.0
+    # --------------------------
+    # Numeric Fields
+    # --------------------------
+    numeric_fields = [
+        'Impact_Level',
+        'Tariff_Change',
+        'StockMarket_Shock',
+        'Currency_Shift'
+    ]
 
-if 'Quantity_Tons' in df.columns:
-    df['import_volume'] = pd.to_numeric(df['Quantity_Tons'], errors='coerce').fillna(0.0)
-else:
-    df['import_volume'] = 0.0
+    for col in numeric_fields:
+        df[col] = pd.to_numeric(df.get(col, 0), errors='coerce').fillna(0.0)
 
-# Frequency of events per region in last 365 days
-def freq_group(g):
-    g = g.set_index('Date')
-    g = g.sort_index()
-    g['frequency'] = g['News_ID'].rolling('365D').count().values
-    return g.reset_index()
+    # Binary flags
+    for col in ['War_Flag', 'Natural_Calamity_Flag']:
+        df[col] = pd.to_numeric(df.get(col, 0), errors='coerce').fillna(0).astype(int)
 
-df = df.groupby('Region', group_keys=False).apply(freq_group)
+    # --------------------------
+    # Impact Score
+    # --------------------------
+    df['Impact_Score'] = (
+        df['Impact_Level']
+        + df['Tariff_Change']
+        + df['StockMarket_Shock']
+        + df['Currency_Shift']
+        + df['War_Flag']
+        + df['Natural_Calamity_Flag']
+    )
 
-# Country demand
-df['country_demand'] = df.groupby('Region')['import_volume'].transform('sum')
+    # --------------------------
+    # Shipment Features
+    # --------------------------
+    df = df.sort_values("Date")
 
-# --------------------------
-# Show summaries
-# --------------------------
-print("Processed head:")
-print(df.head())
+    if 'Shipment_Value_USD' in df.columns:
+        df['Shipment_Value_USD'] = pd.to_numeric(df['Shipment_Value_USD'], errors='coerce').fillna(0)
+        df['import_growth_pct'] = df['Shipment_Value_USD'].pct_change().fillna(0) * 100
+        df['price_avg'] = df['Shipment_Value_USD'].rolling(7, min_periods=1).mean()
+    else:
+        df['import_growth_pct'] = 0.0
+        df['price_avg'] = 0.0
 
-print(df[['Impact_Score','import_growth_pct','import_volume','frequency','country_demand','price_avg']].describe())
+    if 'Quantity_Tons' in df.columns:
+        df['import_volume'] = pd.to_numeric(df['Quantity_Tons'], errors='coerce').fillna(0.0)
+    else:
+        df['import_volume'] = 0.0
 
-# --------------------------
-# Save output
-# --------------------------
-out_file = 'trade_data_processed.csv'
-df.to_csv(out_file, index=False)
-print(f"Saved processed data to {out_file}")
+    # --------------------------
+    # Rolling Frequency (Optimized)
+    # --------------------------
+    df = df.sort_values(['Region', 'Date'])
+    df['frequency'] = (
+        df.groupby('Region')
+        .rolling('365D', on='Date')['News_ID']
+        .count()
+        .reset_index(level=0, drop=True)
+    )
+
+    # --------------------------
+    # Country Demand
+    # --------------------------
+    df['country_demand'] = df.groupby('Region')['import_volume'].transform('sum')
+
+    # --------------------------
+    # Save if needed
+    # --------------------------
+    if save:
+        OUTPUT_PATH.parent.mkdir(exist_ok=True)
+        df.to_csv(OUTPUT_PATH, index=False)
+
+    return df
