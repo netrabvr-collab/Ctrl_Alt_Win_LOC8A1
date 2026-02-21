@@ -6,11 +6,11 @@ from pathlib import Path
 # Paths
 # -------------------------
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "trade_data.xlsx"
+DATA_PATH = BASE_DIR / "trade_data_processed_cleaned.csv"
 MODEL_PATH = BASE_DIR / "lead_model.pkl"
 
 # -------------------------
-# Load Model Once
+# Load Model
 # -------------------------
 if not MODEL_PATH.exists():
     raise FileNotFoundError("Trained model not found. Run train_model.py first.")
@@ -26,7 +26,7 @@ def generate_lead_scores() -> pd.DataFrame:
     if not DATA_PATH.exists():
         raise FileNotFoundError("Dataset not found.")
 
-    df = pd.read_excel(DATA_PATH)
+    df = pd.read_csv(DATA_PATH)
 
     features = [
         "Intent_Score",
@@ -47,7 +47,9 @@ def generate_lead_scores() -> pd.DataFrame:
     # Convert to 0–100 score
     df["lead_score"] = probabilities * 100
 
-    # Categorize
+    # -------------------------
+    # Categorize Leads
+    # -------------------------
     def categorize(score):
         if score >= 75:
             return "High Potential"
@@ -58,68 +60,69 @@ def generate_lead_scores() -> pd.DataFrame:
 
     df["lead_category"] = df["lead_score"].apply(categorize)
 
+    # -------------------------
+    # AI Explanation Generator
+    # -------------------------
+    def generate_reason(row):
+        reasons = []
+
+        if row["Intent_Score"] > df["Intent_Score"].quantile(0.65):
+            reasons.append("High Buyer Intent")
+
+        if row["Prompt_Response_Score"] > df["Prompt_Response_Score"].median():
+            reasons.append("Strong Responsiveness")
+
+        if row["SalesNav_ProfileViews"] > df["SalesNav_ProfileViews"].median():
+            reasons.append("High Engagement Activity")
+
+        if row["Quantity_Tons"] > df["Quantity_Tons"].median():
+            reasons.append("Strong Production Capacity")
+
+        if row["Tariff_Impact"] < df["Tariff_Impact"].median():
+            reasons.append("Low Tariff Risk")
+
+        return ", ".join(reasons[:3]) if reasons else "Balanced Performance"
+
+    df["ai_reason"] = df.apply(generate_reason, axis=1)
+
+    # -------------------------
+    # Final Output Columns
+    # -------------------------
     final_df = df[[
         "Exporter_ID",
         "Industry",
         "State",
         "Revenue_Size_USD",
+        "Quantity_Tons",
         "lead_score",
-        "lead_category"
+        "lead_category",
+        "ai_reason"
     ]].sort_values(by="lead_score", ascending=False)
 
     return final_df
-def match_buyers_to_exporters(buyer_id: str) -> pd.DataFrame:
 
-    buyers_path = BASE_DIR / "buyers.xlsx"
 
-    if not buyers_path.exists():
-        raise FileNotFoundError("buyers.xlsx not found.")
+# -------------------------
+# Feature Importance
+# -------------------------
+def get_feature_importance():
 
-    buyers_df = pd.read_excel(buyers_path)
+    feature_names = [
+        "Intent_Score",
+        "Shipment_Value_USD",
+        "Quantity_Tons",
+        "Prompt_Response_Score",
+        "SalesNav_ProfileViews",
+        "Tariff_Impact",
+        "War_Risk",
+        "Currency_Shift"
+    ]
 
-    if buyer_id not in buyers_df["Buyer_ID"].values:
-        raise ValueError("Buyer ID not found.")
+    importances = model.feature_importances_
 
-    buyer = buyers_df[buyers_df["Buyer_ID"] == buyer_id].iloc[0]
+    importance_df = pd.DataFrame({
+        "feature": feature_names,
+        "importance": importances
+    }).sort_values(by="importance", ascending=False)
 
-    # Get AI-scored exporters
-    exporters = generate_lead_scores()
-
-    # Merge with full dataset for additional fields
-    full_df = pd.read_excel(DATA_PATH)
-    exporters = exporters.merge(
-        full_df[["Exporter_ID", "Industry", "State", "Revenue_Size_USD"]],
-        on="Exporter_ID",
-        how="left"
-    )
-
-    # Industry match score
-    exporters["industry_match"] = (
-        exporters["Industry"].str.lower() == buyer["Preferred_Industry"].lower()
-    ).astype(int)
-
-    # Revenue similarity score
-    exporters["revenue_diff"] = abs(
-        exporters["Revenue_Size_USD"] - buyer["Preferred_Revenue"]
-    )
-
-    max_diff = exporters["revenue_diff"].max()
-    exporters["revenue_score"] = 1 - (exporters["revenue_diff"] / max_diff)
-
-    # Final matchmaking score
-    exporters["match_score"] = (
-        0.5 * (exporters["lead_score"] / 100) +
-        0.3 * exporters["industry_match"] +
-        0.2 * exporters["revenue_score"]
-    )
-
-    result = exporters.sort_values(by="match_score", ascending=False)
-
-    return result[[
-        "Exporter_ID",
-        "Industry",
-        "State",
-        "Revenue_Size_USD",
-        "lead_score",
-        "match_score"
-    ]].head(10)
+    return importance_df

@@ -1,18 +1,17 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from model import generate_lead_scores
-import pandas as pd
-import numpy as np
+from model import generate_lead_scores, get_feature_importance
+
 
 app = FastAPI(
     title="TradeSwipe API",
-    description="AI-driven Export Lead Scoring System",
+    description="AI-driven Export Lead Scoring & Matchmaking System",
     version="1.0.0"
 )
 
 
 # -----------------------------
-# Buyer Input Model (User Input)
+# Buyer Input Model
 # -----------------------------
 class BuyerRequest(BaseModel):
     industry: str
@@ -31,9 +30,9 @@ def home():
 # Get All Leads
 # -----------------------------
 @app.get("/lead-scores")
-def get_lead_scores():
+def get_lead_scores(limit: int = 50):
     df = generate_lead_scores()
-    return df.to_dict(orient="records")
+    return df.head(limit).to_dict(orient="records")
 
 
 # -----------------------------
@@ -66,14 +65,13 @@ def filter_by_state(state: str):
 
 
 # -----------------------------
-# NEW: AI Matchmaking (Live Input)
+# AI Live Matchmaking
 # -----------------------------
 @app.post("/match-live")
 def match_live(buyer: BuyerRequest):
 
     exporters = generate_lead_scores()
 
-    # Industry filtering (case insensitive)
     candidates = exporters[
         exporters["Industry"].str.contains(buyer.industry, case=False, na=False)
     ].copy()
@@ -82,20 +80,17 @@ def match_live(buyer: BuyerRequest):
         return {"message": "No exporters found for this industry"}
 
     # Quantity compatibility
-    if "Quantity_Tons" in exporters.columns:
-        candidates["quantity_diff"] = abs(
-            candidates["Quantity_Tons"] - buyer.required_quantity
-        )
-        candidates["quantity_score"] = 1 / (1 + candidates["quantity_diff"])
-    else:
-        candidates["quantity_score"] = 0.5
+    candidates["quantity_diff"] = abs(
+        candidates["Quantity_Tons"] - buyer.required_quantity
+    )
+    candidates["quantity_score"] = 1 / (1 + candidates["quantity_diff"])
 
     # Intent alignment
     candidates["intent_alignment"] = buyer.intent_score / 100
 
-    # Risk factor (simple adjustment)
-    risk_map = {"Low": 0.2, "Medium": 0.1, "High": 0.0}
-    risk_penalty = risk_map.get(buyer.risk_tolerance, 0.1)
+    # Risk penalty
+    risk_map = {"Low": 0.05, "Medium": 0.10, "High": 0.20}
+    risk_penalty = risk_map.get(buyer.risk_tolerance, 0.10)
 
     # Final match score
     candidates["match_score"] = (
@@ -109,3 +104,8 @@ def match_live(buyer: BuyerRequest):
     ).head(5)
 
     return candidates.to_dict(orient="records")
+@app.get("/feature-importance")
+def feature_importance():
+    df = get_feature_importance()
+    return df.to_dict(orient="records")
+
