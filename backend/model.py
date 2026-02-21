@@ -1,28 +1,34 @@
 import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
+import joblib
 from pathlib import Path
 
-
+# -------------------------
+# Paths
+# -------------------------
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "trade_data.xlsx"
+MODEL_PATH = BASE_DIR / "lead_model.pkl"
+
+# -------------------------
+# Load Model Once
+# -------------------------
+if not MODEL_PATH.exists():
+    raise FileNotFoundError("Trained model not found. Run train_model.py first.")
+
+model = joblib.load(MODEL_PATH)
 
 
+# -------------------------
+# Generate AI Lead Scores
+# -------------------------
 def generate_lead_scores() -> pd.DataFrame:
-    """
-    Generate lead scores from trade dataset.
-    Returns sorted DataFrame.
-    """
 
     if not DATA_PATH.exists():
-        raise FileNotFoundError(f"Dataset not found at {DATA_PATH}")
+        raise FileNotFoundError("Dataset not found.")
 
-    df = pd.read_excel(DATA_PATH, engine="openpyxl")
-    df = df.fillna(0)
+    df = pd.read_excel(DATA_PATH)
 
-    # -------------------------
-    # Required Columns
-    # -------------------------
-    required_columns = [
+    features = [
         "Intent_Score",
         "Shipment_Value_USD",
         "Quantity_Tons",
@@ -30,78 +36,28 @@ def generate_lead_scores() -> pd.DataFrame:
         "SalesNav_ProfileViews",
         "Tariff_Impact",
         "War_Risk",
-        "Currency_Shift",
-        "Exporter_ID",
-        "Industry",
-        "State",
-        "Revenue_Size_USD",
-    ]
-
-    missing = [col for col in required_columns if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-
-    # -------------------------
-    # Feature Scaling
-    # -------------------------
-    main_features = [
-        "Intent_Score",
-        "Shipment_Value_USD",
-        "Quantity_Tons",
-        "Prompt_Response_Score",
-        "SalesNav_ProfileViews"
-    ]
-
-    risk_features = [
-        "Tariff_Impact",
-        "War_Risk",
         "Currency_Shift"
     ]
 
-    scaler_main = MinMaxScaler()
-    scaler_risk = MinMaxScaler()
+    X = df[features]
 
-    df[main_features] = scaler_main.fit_transform(df[main_features])
-    df[risk_features] = scaler_risk.fit_transform(df[risk_features])
+    # Predict probability of Converted = 1
+    probabilities = model.predict_proba(X)[:, 1]
 
-    # -------------------------
-    # Lead Score Formula
-    # -------------------------
-    positive_score = (
-        0.30 * df["Intent_Score"] +
-        0.25 * df["Shipment_Value_USD"] +
-        0.15 * df["Quantity_Tons"] +
-        0.15 * df["Prompt_Response_Score"] +
-        0.15 * df["SalesNav_ProfileViews"]
-    )
+    # Convert to 0–100 score
+    df["lead_score"] = probabilities * 100
 
-    risk_penalty = (
-        0.20 * df["Tariff_Impact"] +
-        0.10 * df["War_Risk"] +
-        0.10 * df["Currency_Shift"]
-    )
+    # Categorize
+    def categorize(score):
+        if score >= 75:
+            return "High Potential"
+        elif score >= 40:
+            return "Medium Potential"
+        else:
+            return "Low Potential"
 
-    df["lead_score_raw"] = positive_score - risk_penalty
+    df["lead_category"] = df["lead_score"].apply(categorize)
 
-    # Scale final score 0–100
-    df["lead_score"] = (
-        MinMaxScaler()
-        .fit_transform(df[["lead_score_raw"]])
-        * 100
-    )
-
-    # -------------------------
-    # Categorization
-    # -------------------------
-    df["lead_category"] = pd.cut(
-        df["lead_score"],
-        bins=[-1, 40, 75, 100],
-        labels=["Low Potential", "Medium Potential", "High Potential"]
-    )
-
-    # -------------------------
-    # Final Output
-    # -------------------------
     final_df = df[[
         "Exporter_ID",
         "Industry",
@@ -112,3 +68,58 @@ def generate_lead_scores() -> pd.DataFrame:
     ]].sort_values(by="lead_score", ascending=False)
 
     return final_df
+def match_buyers_to_exporters(buyer_id: str) -> pd.DataFrame:
+
+    buyers_path = BASE_DIR / "buyers.xlsx"
+
+    if not buyers_path.exists():
+        raise FileNotFoundError("buyers.xlsx not found.")
+
+    buyers_df = pd.read_excel(buyers_path)
+
+    if buyer_id not in buyers_df["Buyer_ID"].values:
+        raise ValueError("Buyer ID not found.")
+
+    buyer = buyers_df[buyers_df["Buyer_ID"] == buyer_id].iloc[0]
+
+    # Get AI-scored exporters
+    exporters = generate_lead_scores()
+
+    # Merge with full dataset for additional fields
+    full_df = pd.read_excel(DATA_PATH)
+    exporters = exporters.merge(
+        full_df[["Exporter_ID", "Industry", "State", "Revenue_Size_USD"]],
+        on="Exporter_ID",
+        how="left"
+    )
+
+    # Industry match score
+    exporters["industry_match"] = (
+        exporters["Industry"].str.lower() == buyer["Preferred_Industry"].lower()
+    ).astype(int)
+
+    # Revenue similarity score
+    exporters["revenue_diff"] = abs(
+        exporters["Revenue_Size_USD"] - buyer["Preferred_Revenue"]
+    )
+
+    max_diff = exporters["revenue_diff"].max()
+    exporters["revenue_score"] = 1 - (exporters["revenue_diff"] / max_diff)
+
+    # Final matchmaking score
+    exporters["match_score"] = (
+        0.5 * (exporters["lead_score"] / 100) +
+        0.3 * exporters["industry_match"] +
+        0.2 * exporters["revenue_score"]
+    )
+
+    result = exporters.sort_values(by="match_score", ascending=False)
+
+    return result[[
+        "Exporter_ID",
+        "Industry",
+        "State",
+        "Revenue_Size_USD",
+        "lead_score",
+        "match_score"
+    ]].head(10)
