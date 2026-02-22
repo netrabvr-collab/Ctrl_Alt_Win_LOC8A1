@@ -85,22 +85,40 @@ const ExporterDashboard = () => {
             </h2>
           </div>
           <div className="divide-y divide-border">
-            {regions.map((r, i) => (
-              <div key={i} className="flex items-center justify-between px-5 py-4 hover:bg-accent/50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${riskColor(r.risk_level)}`}>
-                    {riskIcon(r.risk_level)}
-                  </div>
-                  <div>
-                    <p className="font-medium text-card-foreground">{r.region}</p>
-                    <p className="text-xs text-muted-foreground">Trade Vol: ${r.trade_volume.toLocaleString()}</p>
-                  </div>
-                </div>
-                <span className={`text-xs font-semibold px-3 py-1 rounded-full ${riskColor(r.risk_level)}`}>
-                  {r.risk_level} Risk
-                </span>
-              </div>
-            ))}
+            {Array.isArray(regions) &&
+  regions.map((r, i) => (
+    <div
+      key={i}
+      className="flex items-center justify-between px-5 py-4 hover:bg-accent/50 transition-colors"
+    >
+      <div className="flex items-center gap-3">
+        <div
+          className={`w-8 h-8 rounded-lg flex items-center justify-center ${riskColor(
+            r.risk_level
+          )}`}
+        >
+          {riskIcon(r.risk_level)}
+        </div>
+        <div>
+          <p className="font-medium text-card-foreground">
+            {r.region}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Trade Vol: ${r.trade_volume?.toLocaleString?.() ?? 0}
+          </p>
+        </div>
+      </div>
+
+      <span
+        className={`text-xs font-semibold px-3 py-1 rounded-full ${riskColor(
+          r.risk_level
+        )}`}
+      >
+        {r.risk_level} Risk
+      </span>
+    </div>
+  ))}
+
           </div>
         </div>
       </div>

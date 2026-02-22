@@ -1,9 +1,19 @@
 import axios from "axios";
 
+/**
+ * Base Axios Instance
+ * Make sure FastAPI is running on port 8000
+ */
 const api = axios.create({
   baseURL: "http://127.0.0.1:8000",
-  headers: { "Content-Type": "application/json" },
+  headers: {
+    "Content-Type": "application/json",
+  },
 });
+
+/* ============================
+   Interfaces
+============================ */
 
 export interface Industry {
   id: string;
@@ -33,11 +43,21 @@ export interface SafeRegion {
   trade_volume: number;
 }
 
+/* ============================
+   API CALLS
+============================ */
+
+/**
+ * GET /industries
+ */
 export const fetchIndustries = async (): Promise<Industry[]> => {
   const { data } = await api.get("/industries");
   return data;
 };
 
+/**
+ * POST /match-live
+ */
 export const matchLive = async (payload: {
   industry: string;
   required_quantity: number;
@@ -49,13 +69,40 @@ export const matchLive = async (payload: {
   return data;
 };
 
-export const fetchExporterDashboard = async (): Promise<ExporterDashboardData> => {
-  const { data } = await api.get("/exporter-dashboard");
+/**
+ * GET /exporter-dashboard?industry=XYZ
+ * Fixes 422 error by sending required query param
+ */
+export const fetchExporterDashboard = async (
+  industry: string
+): Promise<ExporterDashboardData> => {
+  const { data } = await api.get("/exporter-dashboard", {
+    params: { industry },
+  });
   return data;
 };
 
-export const fetchSafeExportRegions = async (): Promise<SafeRegion[]> => {
-  const { data } = await api.get("/safe-export-regions");
+/**
+ * GET /safe-export-regions?industry=XYZ
+ * Fixes 422 error by sending required query param
+ */
+export const fetchSafeExportRegions = async (
+  industry: string
+): Promise<SafeRegion[]> => {
+  const { data } = await api.get("/safe-export-regions", {
+    params: { industry },
+  });
+  return data;
+};
+
+/**
+ * GET /matchmaking
+ * IMPORTANT:
+ * Use same backend (port 8000)
+ * Remove localhost:5000 to avoid mixed backend
+ */
+export const getMatchmaking = async () => {
+  const { data } = await api.get("/matchmaking");
   return data;
 };
 
